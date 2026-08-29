@@ -4,10 +4,13 @@ import { Canvas } from "@react-three/fiber";
 import { useCallback, useMemo, useState } from "react";
 import * as THREE from "three";
 import { usePreparedBuildings, type PreparedBuilding } from "./Buildings";
-import { Scene } from "./Scene";
+import { Scene, type Focus } from "./Scene";
 import type { CampusData } from "@/lib/types";
 
 type Props = { data: CampusData };
+
+/** Ancho de la barra lateral en px. Debe coincidir con la clase `w-72` del <aside>. */
+const SIDEBAR_WIDTH = 288;
 
 export function CampusExplorer({ data }: Props) {
   const prepared = usePreparedBuildings(data.buildings);
@@ -17,9 +20,7 @@ export function CampusExplorer({ data }: Props) {
   const [showLabels, setShowLabels] = useState(true);
   const [query, setQuery] = useState("");
   const [includeUnnamed, setIncludeUnnamed] = useState(false);
-  const [focus, setFocus] = useState<{ position: [number, number, number]; id: string } | null>(
-    null,
-  );
+  const [focus, setFocus] = useState<Focus | null>(null);
 
   const radius = Math.max(data.meta.widthM, data.meta.depthM) / 2;
 
@@ -59,6 +60,9 @@ export function CampusExplorer({ data }: Props) {
         setFocus({
           id,
           position: [p.geometry.center[0], p.geometry.top * 0.5, p.geometry.center[1]],
+          // Se encuadra según lo mayor entre huella y altura, para que una torre
+          // estrecha y alta no quede cortada.
+          extent: Math.max(p.geometry.footprintRadius, p.geometry.top * 0.6),
         });
       }
     },
@@ -78,13 +82,18 @@ export function CampusExplorer({ data }: Props) {
         </div>
       ) : (
         <Canvas
-          shadows
+          // `shadows` booleano hace que r3f pida PCFSoftShadowMap, deprecado en three
+          // 0.185: el motor lo sustituye por PCFShadowMap y avisa por consola. Se pide
+          // directamente el que se acaba usando, así que no hay cambio visual.
+          shadows="percentage"
           dpr={[1, 2]}
           camera={{
             fov: 45,
             near: 1,
             far: radius * 12,
-            position: [radius * 1.05, radius * 1.15, radius * 1.75],
+            // A ~790 m con fov 45 entran los 590 m de fondo del campus. Más cerca
+            // se recorta el extremo sur, que es donde están las zonas deportivas.
+            position: [radius * 1.1, radius * 1.45, radius * 1.95],
           }}
           gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
           onPointerMissed={() => setSelectedId(null)}
@@ -99,6 +108,7 @@ export function CampusExplorer({ data }: Props) {
             hoveredId={hoveredId}
             showLabels={showLabels}
             focus={focus}
+            sidebarWidth={SIDEBAR_WIDTH}
             onSelect={select}
             onHover={setHoveredId}
           />
@@ -182,7 +192,7 @@ export function CampusExplorer({ data }: Props) {
             type="button"
             onClick={() => {
               setSelectedId(null);
-              setFocus({ id: `reset:${Date.now()}`, position: [0, 0, 0] });
+              setFocus({ id: `reset:${Date.now()}`, position: [0, 0, 0], extent: radius });
             }}
             className="rounded-md border border-white/15 bg-white/5 px-2.5 py-2 text-left font-mono text-[10.5px] hover:bg-white/10"
           >

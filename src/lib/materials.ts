@@ -22,12 +22,18 @@ type Finish = {
   envMapIntensity?: number;
 };
 
+/**
+ * El metalness alto es una trampa aquí: un material metálico solo se ve por lo que
+ * refleja, y con un entorno de estudio poco luminoso los edificios `steel` o `glass`
+ * salen casi negros en vez de metálicos. Se usan valores moderados y se compensa el
+ * brillo con envMapIntensity, que sí depende del color base.
+ */
 const FINISHES: Record<string, Finish> = {
-  glass: { roughness: 0.05, metalness: 0.85, transparent: true, opacity: 0.68, envMapIntensity: 1.6 },
-  mirror: { roughness: 0.02, metalness: 1, envMapIntensity: 2 },
-  metal: { roughness: 0.35, metalness: 0.9, envMapIntensity: 1.2 },
-  steel: { roughness: 0.3, metalness: 0.95, envMapIntensity: 1.3 },
-  metal_plates: { roughness: 0.42, metalness: 0.85, envMapIntensity: 1.1 },
+  glass: { roughness: 0.12, metalness: 0.35, transparent: true, opacity: 0.78, envMapIntensity: 1.9 },
+  mirror: { roughness: 0.04, metalness: 0.85, envMapIntensity: 2.2 },
+  metal: { roughness: 0.4, metalness: 0.45, envMapIntensity: 1.4 },
+  steel: { roughness: 0.38, metalness: 0.5, envMapIntensity: 1.5 },
+  metal_plates: { roughness: 0.45, metalness: 0.4, envMapIntensity: 1.3 },
   brick: { roughness: 0.94, metalness: 0 },
   concrete: { roughness: 0.9, metalness: 0 },
   cement: { roughness: 0.92, metalness: 0 },

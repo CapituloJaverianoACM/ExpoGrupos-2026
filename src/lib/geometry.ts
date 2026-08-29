@@ -75,6 +75,8 @@ export type BuildingGeometry = {
   /** Centro en XZ del mundo y altura total — para etiquetas y encuadre de cámara. */
   center: [number, number];
   top: number;
+  /** Media diagonal de la huella, en metros. El encuadre se escala con esto. */
+  footprintRadius: number;
 };
 
 export function buildBuildingGeometry(b: Building): BuildingGeometry | null {
@@ -150,8 +152,9 @@ export function buildBuildingGeometry(b: Building): BuildingGeometry | null {
     }
   }
   const center = shapeToWorldXZ([(minX + maxX) / 2, (minY + maxY) / 2]);
+  const footprintRadius = Math.hypot(maxX - minX, maxY - minY) / 2;
 
-  return { body, roof, center, top };
+  return { body, roof, center, top, footprintRadius };
 }
 
 /** Superficie del campus a partir del contorno oficial (way/40739535). */

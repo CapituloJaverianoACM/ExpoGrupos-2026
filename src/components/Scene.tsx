@@ -81,9 +81,11 @@ function Ground({ data, radius }: { data: CampusData; radius: number }) {
 
   return (
     <group>
-      {/* Contexto urbano fuera del campus */}
+      {/* Contexto urbano fuera del campus. Tiene que extenderse más allá del final de
+          la niebla (radius*7): si no, se ve el borde del plano y el campus parece una
+          isla flotando en el vacío al alejar la cámara. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.6, 0]} receiveShadow>
-        <planeGeometry args={[radius * 6, radius * 6]} />
+        <planeGeometry args={[radius * 20, radius * 20]} />
         <meshStandardMaterial color="#1b2733" roughness={1} />
       </mesh>
 
@@ -102,18 +104,13 @@ function Ground({ data, radius }: { data: CampusData; radius: number }) {
  * y conserva la distancia y el ángulo actuales del usuario, en vez de teletransportar
  * la cámara a una pose fija.
  */
-function CameraRig({
-  focus,
-  radius,
-}: {
-  focus: { position: [number, number, number]; id: string } | null;
-  radius: number;
-}) {
+function CameraRig({ focus, radius }: { focus: Focus | null; radius: number }) {
   const controls = useThree((s) => s.controls) as
     | (THREE.EventDispatcher & { target: THREE.Vector3; update: () => void })
     | null;
   const camera = useThree((s) => s.camera);
   const goal = useRef<THREE.Vector3 | null>(null);
+  const goalDistance = useRef(0);
   const lastId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -121,28 +118,94 @@ function CameraRig({
     if (focus.id === lastId.current) return;
     lastId.current = focus.id;
     goal.current = new THREE.Vector3(...focus.position);
-  }, [focus]);
+    // La distancia se escala con el tamaño del edificio, no con el del campus:
+    // una fracción fija del radio del campus deja la cámara pegada a los edificios
+    // pequeños y demasiado lejos de los grandes.
+    goalDistance.current = THREE.MathUtils.clamp(
+      focus.extent * 3.2,
+      55,
+      radius * 1.6,
+    );
+  }, [focus, radius]);
 
   useFrame((_, delta) => {
     if (!goal.current || !controls) return;
 
     const target = controls.target;
     const offset = camera.position.clone().sub(target);
+    const current = offset.length();
+    if (current < 1e-6) return;
 
-    // Acercarse si estamos demasiado lejos para ver el edificio enfocado.
-    const desired = Math.min(offset.length(), radius * 0.75);
-    if (offset.length() > 1e-6) offset.setLength(desired);
+    // Elevación mínima al enfocar. Sin esto, volar desde un ángulo casi horizontal
+    // mete la cámara DENTRO de los edificios que hay entre ella y el objetivo:
+    // se acerca en línea recta y no hay nada que la aparte. Subirla por encima de
+    // MIN_FOCUS_ELEVATION garantiza que mira el edificio desde arriba, despejada.
+    const direction = offset.clone().normalize();
+    const elevation = Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
+    if (elevation < MIN_FOCUS_ELEVATION) {
+      const azimuth = Math.atan2(direction.x, direction.z);
+      const cos = Math.cos(MIN_FOCUS_ELEVATION);
+      direction.set(
+        Math.sin(azimuth) * cos,
+        Math.sin(MIN_FOCUS_ELEVATION),
+        Math.cos(azimuth) * cos,
+      );
+    }
 
-    const t = 1 - Math.pow(0.0015, delta); // interpolación estable e independiente del framerate
+    // Interpolación estable e independiente del framerate.
+    const t = 1 - Math.pow(0.0015, delta);
+    const nextDistance = THREE.MathUtils.lerp(current, goalDistance.current, t);
+    const wanted = direction.multiplyScalar(nextDistance);
+    offset.lerp(wanted, t);
+
     target.lerp(goal.current, t);
     camera.position.copy(target).add(offset);
     controls.update();
 
-    if (target.distanceTo(goal.current) < 0.4) goal.current = null;
+    if (
+      target.distanceTo(goal.current) < 0.4 &&
+      Math.abs(offset.length() - goalDistance.current) < 0.5
+    ) {
+      goal.current = null;
+    }
   });
 
   return null;
 }
+
+/**
+ * Compensa la barra lateral: sin esto el campus se centra en el canvas completo y queda
+ * parcialmente tapado, porque 288 px de la izquierda están cubiertos por la lista.
+ * `setViewOffset` desplaza la proyección, así que el raycasting sigue siendo coherente.
+ */
+function SidebarViewOffset({ left }: { left: number }) {
+  const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
+  const size = useThree((s) => s.size);
+
+  useEffect(() => {
+    const w = Math.round(size.width);
+    const h = Math.round(size.height);
+    if (w === 0 || h === 0) return;
+    camera.setViewOffset(w, h, -left / 2, 0, w, h);
+    camera.updateProjectionMatrix();
+    return () => {
+      camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+    };
+  }, [camera, size.width, size.height, left]);
+
+  return null;
+}
+
+/** ~32°. Ángulo mínimo sobre el horizonte al que se sitúa la cámara al enfocar. */
+const MIN_FOCUS_ELEVATION = 0.56;
+
+export type Focus = {
+  id: string;
+  position: [number, number, number];
+  /** Media diagonal de la huella del objetivo; determina a qué distancia encuadrar. */
+  extent: number;
+};
 
 export type SceneProps = {
   data: CampusData;
@@ -155,7 +218,9 @@ export type SceneProps = {
   selectedId: string | null;
   hoveredId: string | null;
   showLabels: boolean;
-  focus: { position: [number, number, number]; id: string } | null;
+  focus: Focus | null;
+  /** Ancho en px que la barra lateral tapa del canvas. */
+  sidebarWidth: number;
   onSelect: (id: string | null) => void;
   onHover: (id: string | null) => void;
 };
@@ -167,6 +232,7 @@ export function Scene({
   hoveredId,
   showLabels,
   focus,
+  sidebarWidth,
   onSelect,
   onHover,
 }: SceneProps) {
@@ -196,9 +262,12 @@ export function Scene({
         selectedId={selectedId}
         hoveredId={hoveredId}
         showLabels={showLabels}
+        campusRadius={radius}
+        sidebarWidth={sidebarWidth}
       />
 
       <CameraRig focus={focus} radius={radius} />
+      <SidebarViewOffset left={sidebarWidth} />
 
       <OrbitControls
         makeDefault
@@ -206,7 +275,10 @@ export function Scene({
         enablePan
         screenSpacePanning={false}
         minDistance={25}
-        maxDistance={radius * 5}
+        // radius*5 dejaba alejarse hasta ~1,5 km, donde el campus era una mancha
+        // diminuta flotando en el vacío. radius*3 (~885 m) es lo justo para verlo
+        // entero sin que sobre pantalla.
+        maxDistance={radius * 3}
         // Un pelo por encima del horizonte, para no meter la cámara bajo el terreno.
         maxPolarAngle={Math.PI / 2 - 0.04}
         target={[0, 0, 0]}
