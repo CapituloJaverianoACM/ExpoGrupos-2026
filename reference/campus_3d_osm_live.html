@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Campus Javeriana 3D — Datos en vivo de OpenStreetMap</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --navy:#0d1b2e; --panel:#0f2038cc; --terracotta:#c9603e; --terracotta-2:#e07a4f;
+    --ink:#f4efe4; --ink-dim:#a9b7c9; --amber:#e0b84f;
+    --mono:'SF Mono','Menlo','Consolas',monospace; --sans:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--navy);font-family:var(--sans);}
+  #canvas-holder{position:absolute;inset:0;} canvas{display:block;}
+
+  #loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--navy);z-index:20;}
+  #loading .spinner{width:34px;height:34px;border-radius:50%;border:3px solid #ffffff22;border-top-color:var(--terracotta-2);animation:spin 0.9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loading .status{font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);letter-spacing:.03em;}
+  #loading .err{max-width:420px;text-align:center;font-size:13px;color:var(--ink);line-height:1.6;display:none;}
+  #loading .retry{display:none;font-family:var(--mono);font-size:11.5px;background:var(--terracotta);color:#1a0d06;border:none;padding:9px 16px;border-radius:6px;cursor:pointer;}
+
+  #hud-top{position:absolute;top:0;left:0;right:0;display:flex;align-items:flex-start;justify-content:space-between;padding:16px 22px;background:linear-gradient(180deg, rgba(13,27,46,.94), rgba(13,27,46,0));pointer-events:none;z-index:5;}
+  #hud-top .title{font-family:var(--mono);letter-spacing:.1em;font-size:11px;color:var(--ink-dim);text-transform:uppercase;}
+  #hud-top .title b{display:block;font-family:var(--sans);font-size:19px;color:var(--ink);text-transform:none;margin-top:2px;font-weight:700;}
+  #stats{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);text-align:right;line-height:1.5;}
+  #stats b{color:var(--terracotta-2);}
+
+  #sidebar{position:absolute;top:96px;left:0;bottom:16px;width:260px;background:var(--panel);backdrop-filter:blur(10px);border-right:1px solid #ffffff14;display:flex;flex-direction:column;z-index:5;}
+  #sidebar .head{padding:12px 16px 8px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ink-dim);text-transform:uppercase;border-bottom:1px solid #ffffff14;}
+  #search-box{margin:10px 14px;padding:7px 10px;background:#ffffff0d;border:1px solid #ffffff1f;border-radius:6px;color:var(--ink);font-size:12px;font-family:var(--sans);}
+  #search-box::placeholder{color:var(--ink-dim);}
+  #building-list{overflow-y:auto;flex:1;padding:4px 0;}
+  .b-item{padding:8px 16px;cursor:pointer;color:var(--ink);font-size:12px;border-left:2px solid transparent;line-height:1.35;}
+  .b-item:hover{background:#ffffff0d;} .b-item.active{background:#ffffff14;border-left-color:var(--terracotta-2);}
+  .b-item small{display:block;color:var(--ink-dim);font-family:var(--mono);font-size:9.5px;margin-top:1px;}
+  #controls-row{padding:10px 16px;border-top:1px solid #ffffff14;display:flex;flex-direction:column;gap:7px;}
+  .toggle-btn{font-family:var(--mono);font-size:10.5px;background:#ffffff0d;border:1px solid #ffffff1f;color:var(--ink);padding:8px 10px;border-radius:6px;cursor:pointer;text-align:left;display:flex;justify-content:space-between;}
+  .toggle-btn:hover{background:#ffffff1a;} .toggle-btn.on .state{color:var(--terracotta-2);} .toggle-btn .state{color:var(--ink-dim);}
+
+  #info-panel{position:absolute;right:16px;bottom:44px;width:290px;background:var(--panel);backdrop-filter:blur(10px);border:1px solid #ffffff1f;border-radius:10px;padding:16px;color:var(--ink);transform:translateY(12px);opacity:0;pointer-events:none;transition:transform .25s ease, opacity .25s ease;z-index:6;}
+  #info-panel.show{transform:translateY(0);opacity:1;pointer-events:auto;}
+  #info-panel h3{font-size:16px;margin:2px 0 8px;font-weight:700;line-height:1.3;}
+  #info-panel .row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:5px 0;border-top:1px solid #ffffff14;}
+  #info-panel .row b{color:var(--ink);font-family:var(--sans);}
+  #info-panel .close{position:absolute;top:10px;right:12px;cursor:pointer;color:var(--ink-dim);font-size:16px;}
+
+  #attribution{position:absolute;bottom:0;left:0;right:0;text-align:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);padding:5px;background:#0d1b2ecc;z-index:5;}
+  #attribution a{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+<div id="canvas-holder"></div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="status" id="loading-status">Buscando el campus en OpenStreetMap…</div>
+  <div class="err" id="loading-err"></div>
+  <button class="retry" id="retry-btn">Reintentar</button>
+</div>
+
+<div id="hud-top">
+  <div class="title">Datos en vivo · OpenStreetMap<b>Campus Javeriana — geometría real</b></div>
+  <div id="stats">Cargando…</div>
+</div>
+
+<div id="sidebar">
+  <div class="head">Edificios encontrados en OSM</div>
+  <input id="search-box" placeholder="Buscar edificio…">
+  <div id="building-list"></div>
+  <div id="controls-row">
+    <button class="toggle-btn on" id="toggle-labels">Etiquetas <span class="state">ON</span></button>
+    <button class="toggle-btn" id="reset-cam">Reiniciar cámara <span class="state">↺</span></button>
+  </div>
+</div>
+
+<div id="info-panel">
+  <div class="close" id="info-close">✕</div>
+  <h3 id="info-name">—</h3>
+  <div class="row"><span>Tipo (OSM)</span><b id="info-type">—</b></div>
+  <div class="row"><span>Niveles</span><b id="info-levels">—</b></div>
+  <div class="row"><span>Altura estimada</span><b id="info-height">—</b></div>
+  <div class="row"><span>ID en OSM</span><b id="info-id">—</b></div>
+</div>
+
+<div id="attribution">Datos de edificios © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a> (licencia ODbL)</div>
+
+<script>
+/* ===========================================================
+   CONSULTA EN VIVO A OPENSTREETMAP — sin Blender, sin modelado manual
+   1) Nominatim: ubica el campus y su bounding box real
+   2) Overpass API: descarga TODOS los edificios mapeados ahí
+   3) Three.js ExtrudeGeometry: convierte cada contorno + altura
+      en geometría 3D real, a partir de los datos crudos
+=========================================================== */
+
+const CAMPUS_QUERY = 'Pontificia Universidad Javeriana, Bogotá, Colombia';
+// Bbox de respaldo (aprox., por si Nominatim no responde) [south, north, west, east]
+const FALLBACK_BBOX = [4.6255, 4.6325, -74.0685, -74.0615];
+const PAD_DEG = 0.0012; // ~130m de margen extra alrededor del resultado de Nominatim
+
+const statusEl = document.getElementById('loading-status');
+const errEl = document.getElementById('loading-err');
+const retryBtn = document.getElementById('retry-btn');
+const loadingEl = document.getElementById('loading');
+
+function setStatus(msg){ statusEl.textContent = msg; }
+function showError(msg){
+  statusEl.style.display='none';
+  document.querySelector('#loading .spinner').style.display='none';
+  errEl.style.display='block'; errEl.textContent = msg;
+  retryBtn.style.display='inline-block';
+}
+
+async function geocodeCampus(){
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(CAMPUS_QUERY)}`;
+  const res = await fetch(url, {headers:{'Accept':'application/json'}});
+  if(!res.ok) throw new Error('nominatim-fail');
+  const data = await res.json();
+  if(!data.length) throw new Error('nominatim-empty');
+  const bb = data[0].boundingbox.map(Number); // [south, north, west, east]
+  return [bb[0]-PAD_DEG, bb[1]+PAD_DEG, bb[2]-PAD_DEG, bb[3]+PAD_DEG];
+}
+
+async function fetchBuildings(bbox){
+  const [south, north, west, east] = bbox;
+  const query = `[out:json][timeout:30];(way["building"](${south},${west},${north},${east}););out geom;`;
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method:'POST',
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if(!res.ok) throw new Error('overpass-fail');
+  const data = await res.json();
+  return (data.elements||[]).filter(el => el.type==='way' && el.geometry && el.geometry.length>=3);
+}
+
+function heightFor(tags){
+  if(tags.height) return parseFloat(tags.height) || 6;
+  if(tags['building:levels']) return parseFloat(tags['building:levels'])*3.2 || 6;
+  if(tags.building==='hospital') return 12;
+  if(tags.building==='university'||tags.building==='college') return 9;
+  return 6;
+}
+function colorFor(tags){
+  const t = tags.building;
+  if(t==='hospital') return 0xb2453c;
+  if(t==='university'||t==='college'||t==='school') return 0xc9603e;
+  if(t==='church'||t==='chapel') return 0x9c7a4a;
+  if(t==='sports_hall'||t==='stadium') return 0x3d7a4d;
+  return 0xd8cdb8;
+}
+function nameFor(tags, osmid){
+  return tags.name || tags['name:es'] || (tags.building ? `Edificio (${tags.building})` : `Edificio sin etiqueta (#${osmid})`);
+}
+
+/* ---------------- ESCENA THREE.JS ---------------- */
+const holder = document.getElementById('canvas-holder');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1b2e);
+scene.fog = new THREE.Fog(0x0d1b2e, 90, 260);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 900);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled = true;
+holder.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x2a2015, 0.8));
+const sun = new THREE.DirectionalLight(0xffe9c7, 1.15);
+sun.position.set(-60,90,50); sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048);
+scene.add(sun);
+
+let target = new THREE.Vector3(0,0,0);
+let camDist = 120, camTheta = Math.PI*0.25, camPhi = Math.PI*0.35, flyTarget=null;
+function updateCamera(){
+  camera.position.set(target.x+camDist*Math.sin(camPhi)*Math.sin(camTheta), target.y+camDist*Math.cos(camPhi), target.z+camDist*Math.sin(camPhi)*Math.cos(camTheta));
+  camera.lookAt(target);
+}
+let dragging=false,lastX=0,lastY=0;
+renderer.domElement.addEventListener('pointerdown', e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;});
+addEventListener('pointerup', ()=>dragging=false);
+addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  camTheta -= dx*0.006; camPhi = Math.min(Math.max(camPhi-dy*0.006,0.15),Math.PI/2-0.03);
+  updateCamera();
+});
+renderer.domElement.addEventListener('wheel', e=>{camDist=Math.min(Math.max(camDist+e.deltaY*0.08,25),260); updateCamera();}, {passive:true});
+
+function makeLabel(text, color='#1a0d06'){
+  const c = document.createElement('canvas'); c.width=512; c.height=96;
+  const ctx = c.getContext('2d');
+  ctx.font='600 30px -apple-system, Segoe UI, sans-serif'; ctx.fillStyle=color; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text.length>22? text.slice(0,20)+'…':text, 256, 48);
+  const tex = new THREE.CanvasTexture(c);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, depthTest:false, transparent:true}));
+  sprite.scale.set(9,1.7,1);
+  return sprite;
+}
+
+const buildingMeshes = [];
+const labelGroup = new THREE.Group(); scene.add(labelGroup);
+const raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
+
+function buildScene(elements, bbox){
+  const [south, north, west, east] = bbox;
+  const originLat = (south+north)/2, originLon = (west+east)/2;
+  const mPerDegLat = 111320;
+  const mPerDegLon = 111320*Math.cos(originLat*Math.PI/180);
+
+  // suelo dimensionado al bbox real
+  const w = (east-west)*mPerDegLon, d = (north-south)*mPerDegLat;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(w*1.3, d*1.3), new THREE.MeshStandardMaterial({color:0x3a5744, roughness:1}));
+  ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+  const grid = new THREE.GridHelper(Math.max(w,d)*1.3, 40, 0x25402f, 0x25402f);
+  grid.position.y=0.01; scene.add(grid);
+
+  elements.forEach(el=>{
+    const tags = el.tags||{};
+    let pts = el.geometry.map(p=>{
+      const x = (p.lon-originLon)*mPerDegLon;
+      const z = (originLat-p.lat)*mPerDegLat;
+      return new THREE.Vector2(x,z);
+    });
+    if(pts.length>1 && pts[0].equals(pts[pts.length-1])) pts.pop();
+    if(pts.length<3) return;
+
+    const height = heightFor(tags);
+    let geo;
+    try{
+      const shape = new THREE.Shape(pts);
+      geo = new THREE.ExtrudeGeometry(shape, {depth:height, bevelEnabled:false});
+    }catch(e){ return; }
+    geo.rotateX(-Math.PI/2);
+
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:colorFor(tags), roughness:0.85}));
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.userData = {name:nameFor(tags, el.id), tags, height, id:el.id};
+    scene.add(mesh);
+    buildingMeshes.push(mesh);
+
+    // centro aproximado para la etiqueta
+    const cx = pts.reduce((s,p)=>s+p.x,0)/pts.length;
+    const cz = pts.reduce((s,p)=>s+p.y,0)/pts.length;
+    const label = makeLabel(nameFor(tags, el.id));
+    label.position.set(cx, height+1.6, cz);
+    labelGroup.add(label);
+  });
+
+  target.set(0,0,0);
+  camDist = Math.max(w,d)*0.9;
+  updateCamera();
+
+  document.getElementById('stats').innerHTML = `<b>${buildingMeshes.length}</b> edificios cargados desde OSM`;
+  renderList();
+  document.getElementById('info-close').addEventListener('click', ()=> document.getElementById('info-panel').classList.remove('show'));
+}
+
+function selectMesh(mesh){
+  const u = mesh.userData;
+  document.getElementById('info-name').textContent = u.name;
+  document.getElementById('info-type').textContent = u.tags.building || '—';
+  document.getElementById('info-levels').textContent = u.tags['building:levels'] || '—';
+  document.getElementById('info-height').textContent = u.height.toFixed(1)+' m';
+  document.getElementById('info-id').textContent = 'way/'+u.id;
+  document.getElementById('info-panel').classList.add('show');
+  const box = new THREE.Box3().setFromObject(mesh);
+  const center = box.getCenter(new THREE.Vector3());
+  flyTarget = new THREE.Vector3(center.x,0,center.z);
+}
+renderer.domElement.addEventListener('click', e=>{
+  mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(buildingMeshes);
+  if(hits.length) selectMesh(hits[0].object);
+});
+
+const listEl = document.getElementById('building-list');
+function renderList(filter=''){
+  listEl.innerHTML = '';
+  buildingMeshes
+    .filter(m=> m.userData.name.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a,b)=> a.userData.name.localeCompare(b.userData.name))
+    .forEach(m=>{
+      const el = document.createElement('div');
+      el.className='b-item';
+      el.innerHTML = `${m.userData.name}<small>${m.userData.tags.building||'sin tipo'} · way/${m.userData.id}</small>`;
+      el.addEventListener('click', ()=> selectMesh(m));
+      listEl.appendChild(el);
+    });
+}
+document.getElementById('search-box').addEventListener('input', e=> renderList(e.target.value));
+document.getElementById('toggle-labels').addEventListener('click', function(){
+  labelGroup.visible = !labelGroup.visible;
+  this.classList.toggle('on', labelGroup.visible); this.querySelector('.state').textContent = labelGroup.visible?'ON':'OFF';
+});
+document.getElementById('reset-cam').addEventListener('click', ()=>{ flyTarget = new THREE.Vector3(0,0,0); });
+
+function animate(){
+  requestAnimationFrame(animate);
+  if(flyTarget){ target.lerp(flyTarget,0.08); if(target.distanceTo(flyTarget)<0.05) flyTarget=null; }
+  updateCamera();
+  renderer.render(scene, camera);
+}
+animate();
+addEventListener('resize', ()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+
+/* ---------------- ORQUESTACIÓN ---------------- */
+async function init(){
+  loadingEl.style.display='flex';
+  document.querySelector('#loading .spinner').style.display='block';
+  statusEl.style.display='block'; errEl.style.display='none'; retryBtn.style.display='none';
+  setStatus('Buscando el campus en OpenStreetMap…');
+  let bbox;
+  try{ bbox = await geocodeCampus(); }
+  catch(e){ console.warn('Nominatim falló, uso bbox de respaldo', e); bbox = FALLBACK_BBOX; }
+
+  setStatus('Descargando edificios reales (Overpass API)…');
+  let elements;
+  try{ elements = await fetchBuildings(bbox); }
+  catch(e){
+    showError('No se pudo conectar con la API de OpenStreetMap desde este entorno. Si estás dentro de una vista previa embebida sin salida a internet, descarga el archivo .html y ábrelo directamente en tu navegador — ahí sí debería funcionar.');
+    return;
+  }
+  if(!elements.length){
+    showError('OpenStreetMap todavía no tiene edificios mapeados en esta zona. Puedes dibujarlos tú mismo gratis en openstreetmap.org (5-10 min por edificio) y volver a cargar esta página.');
+    return;
+  }
+  setStatus(`Construyendo ${elements.length} edificios en 3D…`);
+  buildScene(elements, bbox);
+  loadingEl.style.display='none';
+}
+retryBtn.addEventListener('click', init);
+init();
+</script>
+</body>
+</html>
