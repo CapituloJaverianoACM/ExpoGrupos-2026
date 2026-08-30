@@ -118,6 +118,39 @@ await page.locator("aside").getByText("Etiquetas").click();
 await page.waitForTimeout(1500);
 check("el toggle de etiquetas responde", true);
 
+/* ---------- 4a. Capas de accesos y servicios ---------- */
+console.log("\nCapas de puntos:");
+for (const layer of ["Accesos", "Servicios"]) {
+  const toggle = page.locator("aside").getByText(layer);
+  const found = (await toggle.count()) > 0;
+  check(`existe el toggle de ${layer.toLowerCase()}`, found);
+  if (!found) continue;
+  const before = await page.evaluate(() => (window as unknown as { __draws: number }).__draws);
+  await toggle.click();
+  await page.waitForTimeout(4000);
+  const after = await page.evaluate(() => (window as unknown as { __draws: number }).__draws);
+  check(`la escena sigue dibujando con ${layer.toLowerCase()} activos`, after > before, `+${after - before}`);
+}
+
+/* ---------- 4b. Post-proceso ---------- */
+console.log("\nPost-proceso (oclusión ambiental):");
+const aoToggle = page.locator("aside").getByText("Oclusión");
+check("existe el toggle de oclusión ambiental", (await aoToggle.count()) > 0);
+
+// Montar y desmontar el EffectComposer reconstruye toda la cadena de render. Es el
+// momento en el que se pierde el contexto si algo se libera mal, así que se comprueba
+// que la escena sigue dibujando después del ciclo, no solo que no explota.
+const beforeToggle = await page.evaluate(() => (window as unknown as { __draws: number }).__draws);
+await aoToggle.click();
+await page.waitForTimeout(6000);
+const withoutAO = await page.evaluate(() => (window as unknown as { __draws: number }).__draws);
+check("la escena sigue dibujando con el AO apagado", withoutAO > beforeToggle, `+${withoutAO - beforeToggle}`);
+
+await aoToggle.click();
+await page.waitForTimeout(8000);
+const withAO = await page.evaluate(() => (window as unknown as { __draws: number }).__draws);
+check("la escena sigue dibujando al reactivarlo", withAO > withoutAO, `+${withAO - withoutAO}`);
+
 /* ---------- 5. Errores ---------- */
 console.log("\nErrores de runtime:");
 // Ruido esperable del render por software.
@@ -126,7 +159,10 @@ const realConsole = consoleErrors.filter((e) => !ignorable.test(e));
 check("sin errores en consola", realConsole.length === 0, realConsole.slice(0, 3).join(" | "));
 check("sin excepciones no capturadas", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 
-await page.screenshot({ path: SHOT });
+// El AO cuesta ~la mitad del framerate y bajo SwiftShader la escena va a <1 fps, así
+// que la captura no cabe en el timeout de 30 s por defecto de Playwright. En una GPU
+// real esto sobra; el margen es para el render por software del CI.
+await page.screenshot({ path: SHOT, timeout: 120_000 });
 console.log(`\nCaptura: ${SHOT}`);
 
 await browser.close();

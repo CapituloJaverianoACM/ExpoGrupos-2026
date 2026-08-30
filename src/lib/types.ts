@@ -50,3 +50,114 @@ export type CampusData = {
   campusOutline: Ring;
   buildings: Building[];
 };
+
+/* ------------------------------------------------------------------ *
+ *  Capa de suelo (src/data/terrain.json — ver scripts/fetch-terrain.ts)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Superficie plana: zona verde, cancha, plaza, parqueadero…
+ * `kind` ya viene normalizado por el script de ingesta; el renderer no vuelve a
+ * interpretar tags crudos de OSM.
+ */
+export type TerrainArea = {
+  id: string;
+  /** grass | park | forest | pitch | plaza | parking | construction | water */
+  kind: string;
+  name: string | null;
+  surface: string | null;
+  sport: string | null;
+  outer: Ring;
+  holes: Ring[];
+};
+
+/** Vía lineal (sendero, escalera, calzada). Se convierte en cinta al renderizar. */
+export type TerrainPath = {
+  id: string;
+  /** valor del tag `highway`: footway, steps, service, primary… */
+  kind: string;
+  name: string | null;
+  surface: string | null;
+  /** metros. Estimado por tipo salvo que `widthTagged` sea true. */
+  width: number;
+  widthTagged: boolean;
+  bridge: boolean;
+  /** línea central, en el plano de la shape */
+  points: Ring;
+};
+
+/** Árbol individual (`natural=tree`). La posición es real; el porte se estima. */
+export type TerrainTree = {
+  id: string;
+  pos: [number, number];
+  /** metros, si OSM lo registra */
+  height: number | null;
+  /** `diameter_crown` en metros, si OSM lo registra */
+  crown: number | null;
+  leafType: string | null;
+  species: string | null;
+};
+
+export type TerrainMeta = {
+  source: string;
+  fetchedAt: string;
+  origin: { lat: number; lon: number };
+  ringSpace: string;
+  marginM: number;
+  widthNote: string;
+  areaCount: number;
+  pathCount: number;
+  treeCount: number;
+};
+
+export type TerrainData = {
+  meta: TerrainMeta;
+  areas: TerrainArea[];
+  paths: TerrainPath[];
+  trees: TerrainTree[];
+};
+
+/* ------------------------------------------------------------------ *
+ *  Puntos: accesos y servicios (src/data/places.json)
+ * ------------------------------------------------------------------ */
+
+/** Entrada a un edificio o control de acceso al campus. */
+export type Access = {
+  id: string;
+  /** entrance | gate | turnstile | lift_gate | sliding_gate */
+  type: string;
+  /** `entrance=main` */
+  main: boolean;
+  name: string | null;
+  wheelchair: string | null;
+  pos: [number, number];
+};
+
+/** Servicio dentro del campus (cafetería, banco, teatro…). */
+export type Service = {
+  id: string;
+  /** comida | dinero | estudio | cultura | salud | movilidad | servicios */
+  category: string;
+  /** valor original del tag amenity/shop/office */
+  kind: string;
+  name: string | null;
+  cuisine: string | null;
+  pos: [number, number];
+};
+
+export type PlacesMeta = {
+  source: string;
+  fetchedAt: string;
+  origin: { lat: number; lon: number };
+  ringSpace: string;
+  accessToleranceM: number;
+  note: string;
+  accessCount: number;
+  serviceCount: number;
+};
+
+export type PlacesData = {
+  meta: PlacesMeta;
+  accesses: Access[];
+  services: Service[];
+};

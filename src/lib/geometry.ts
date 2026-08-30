@@ -67,6 +67,76 @@ function skillionRamp(
   };
 }
 
+/**
+ * Altura de entrepiso supuesta cuando OSM no da `building:levels`.
+ * 3,2 m es el valor que ya usa `fallbackHeight()` en la ingesta para el camino inverso
+ * (levels → height); usar el mismo aquí evita que las dos estimaciones se contradigan.
+ */
+const ASSUMED_FLOOR_M = 3.2;
+
+/** Fuera de esta banda, el reparto de pisos no es creíble y no se dibujan ventanas. */
+const MIN_FLOOR_M = 2.2;
+const MAX_FLOOR_M = 7;
+
+export type Floors = {
+  levels: number;
+  /** metros de entrepiso; 0 = no dibujar bandas */
+  floorHeight: number;
+  /** true si `levels` se dedujo de la altura en vez de venir de `building:levels` */
+  estimated: boolean;
+};
+
+/**
+ * Pisos de un edificio, para las bandas de fachada.
+ *
+ * Solo 68 de los 276 volúmenes traen `building:levels`. En el resto se deduce de la
+ * altura, y por eso `estimated` viaja hasta la ficha lateral: la escena gana coherencia
+ * pero el número de pisos que se muestra al usuario no puede afirmarse como dato OSM.
+ *
+ * Se calcula en el cliente y NO en `fetch-osm.ts` a propósito: es una decisión de
+ * representación, no un hecho sobre el campus, y campus.json debe seguir siendo un
+ * volcado limpio de OSM.
+ */
+export function buildingFloors(b: Building): Floors {
+  const usable = b.height - b.minHeight;
+  const none: Floors = { levels: 0, floorHeight: 0, estimated: false };
+
+  // Marquesinas, losas y cubiertas sueltas: no tienen fachada que dividir.
+  if (usable < MIN_FLOOR_M * 2) return none;
+
+  if (b.levels != null && b.levels >= 1) {
+    const h = usable / b.levels;
+    // `building:levels` a veces cuenta plantas que no están en este volumen concreto
+    // (típico en `building:part`), y sale un entrepiso absurdo. Ahí se prefiere estimar.
+    if (h >= MIN_FLOOR_M && h <= MAX_FLOOR_M) {
+      return { levels: b.levels, floorHeight: h, estimated: false };
+    }
+  }
+
+  const levels = Math.max(2, Math.round(usable / ASSUMED_FLOOR_M));
+  const floorHeight = usable / levels;
+  if (floorHeight < MIN_FLOOR_M || floorHeight > MAX_FLOOR_M) return none;
+  return { levels, floorHeight, estimated: true };
+}
+
+/**
+ * Adjunta a la malla el origen y el paso de las bandas de fachada.
+ *
+ * Va como ATRIBUTO de geometría y no como uniform porque los materiales están
+ * cacheados y compartidos entre edificios (ver lib/materials.ts): un uniform sería el
+ * mismo para los 276. El valor es constante en todos los vértices del volumen; el coste
+ * son 2 floats por vértice, a cambio de conservar la caché de materiales intacta.
+ */
+function attachFloorAttribute(geometry: THREE.BufferGeometry, base: number, floorHeight: number) {
+  const count = geometry.attributes.position.count;
+  const data = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    data[i * 2] = base;
+    data[i * 2 + 1] = floorHeight;
+  }
+  geometry.setAttribute("aFloor", new THREE.BufferAttribute(data, 2));
+}
+
 export type BuildingGeometry = {
   /** Cuerpo: grupo 0 = tapas, grupo 1 = muros. */
   body: THREE.BufferGeometry;
@@ -77,6 +147,8 @@ export type BuildingGeometry = {
   top: number;
   /** Media diagonal de la huella, en metros. El encuadre se escala con esto. */
   footprintRadius: number;
+  /** Pisos usados para las bandas de fachada. */
+  floors: Floors;
 };
 
 export function buildBuildingGeometry(b: Building): BuildingGeometry | null {
@@ -154,7 +226,13 @@ export function buildBuildingGeometry(b: Building): BuildingGeometry | null {
   const center = shapeToWorldXZ([(minX + maxX) / 2, (minY + maxY) / 2]);
   const footprintRadius = Math.hypot(maxX - minX, maxY - minY) / 2;
 
-  return { body, roof, center, top, footprintRadius };
+  // Las bandas arrancan en la base REAL del volumen (min_height), no en el suelo: en
+  // los 100 volúmenes con voladizo, contar desde 0 dejaría la primera banda cortada.
+  const floors = buildingFloors(b);
+  attachFloorAttribute(body, base, floors.floorHeight);
+  if (roof) attachFloorAttribute(roof, base, floors.floorHeight);
+
+  return { body, roof, center, top, footprintRadius, floors };
 }
 
 /** Superficie del campus a partir del contorno oficial (way/40739535). */

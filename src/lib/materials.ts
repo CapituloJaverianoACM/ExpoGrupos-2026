@@ -84,11 +84,97 @@ function resolveFinish(material: string | null): Finish {
   return DEFAULT_FINISH;
 }
 
+/**
+ * Bandas de fachada por piso, inyectadas en el shader estándar de three.
+ *
+ * El paso lo lleva la geometría en el atributo `aFloor` = (base, altura de entrepiso),
+ * lo que permite que TODOS los muros compartan un único programa y un único material
+ * cacheado. Con uniforms haría falta un material por edificio y se perdería la caché.
+ *
+ * Tres decisiones que no son obvias:
+ *
+ * - `aFloor.y == 0` significa "sin bandas" (marquesinas, losas, volúmenes de menos de
+ *   dos plantas). Se comprueba en el vertex y se propaga como varying.
+ * - `fwidth()` mide cuánto avanza la coordenada de piso por píxel. Cuando las bandas
+ *   se juntan más de lo que la pantalla puede resolver, se desvanecen: sin esto, al
+ *   alejar la cámara aparece un muaré que parpadea con cada movimiento.
+ * - Se usa `position.y` directamente porque los volúmenes ya vienen en coordenadas de
+ *   mundo y las mallas no llevan transformación propia (ver components/Buildings.tsx).
+ *   Si alguna vez se les pone `position`, esto hay que pasarlo por `modelMatrix`.
+ */
+function applyFloorBands(mat: THREE.MeshStandardMaterial) {
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        attribute vec2 aFloor;
+        varying float vFloorCoord;
+        varying float vFacadeU;
+        varying float vHasFloors;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        vHasFloors = aFloor.y > 0.0 ? 1.0 : 0.0;
+        vFloorCoord = aFloor.y > 0.0 ? (position.y - aFloor.x) / aFloor.y : 0.0;
+        // ExtrudeGeometry da a los muros laterales uv.x = coordenada horizontal EN
+        // METROS del plano de la shape (ver generateSideWallUV). No hay que declarar
+        // 'uv': three ya la declara siempre en el prefijo del vertex shader.
+        vFacadeU = uv.x;`,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying float vFloorCoord;
+        varying float vFacadeU;
+        varying float vHasFloors;`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        float wFloorMask = 0.0;
+        if (vHasFloors > 0.5) {
+          float f = fract(vFloorCoord);
+          // Antepecho abajo, dintel arriba: la ventana ocupa la franja central.
+          float row = smoothstep(0.20, 0.32, f) * (1.0 - smoothstep(0.74, 0.86, f));
+          float fadeRow = 1.0 - smoothstep(0.10, 0.40, fwidth(vFloorCoord));
+
+          // Montantes verticales cada 3,2 m. Sin ellos la fachada se lee como un
+          // edificio a rayas en vez de como un edificio con ventanas.
+          float bay = vFacadeU / 3.2;
+          float c = fract(bay);
+          float col = smoothstep(0.16, 0.28, c) * (1.0 - smoothstep(0.72, 0.84, c));
+          // Cuando los montantes dejan de resolverse en pantalla, la ventana vuelve a
+          // ser una banda corrida en vez de degenerar en ruido.
+          float fadeCol = 1.0 - smoothstep(0.10, 0.40, fwidth(bay));
+
+          wFloorMask = row * fadeRow * mix(1.0, col, fadeCol);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.42, 0.47, 0.58), wFloorMask);
+        }`,
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        `#include <roughnessmap_fragment>
+        // El hueco es vidrio: bajar la rugosidad le da brillo especular y separa la
+        // ventana del muro incluso a contraluz, donde el oscurecimiento no basta.
+        roughnessFactor = mix(roughnessFactor, 0.22, wFloorMask);`,
+      );
+  };
+  // three avisa (con razón) de que dos materiales con onBeforeCompile distinto pueden
+  // compartir programa por error. Aquí la modificación es idéntica en todos los muros,
+  // así que se declara una clave común y se comparte el programa a propósito.
+  mat.customProgramCacheKey = () => "wall-floor-bands";
+}
+
 function getMaterial(
   colour: string,
   finish: Finish,
   key: string,
   isPart: boolean,
+  floorBands = false,
 ): THREE.MeshStandardMaterial {
   const cached = cache.get(key);
   if (cached) return cached;
@@ -111,6 +197,7 @@ function getMaterial(
     polygonOffsetFactor: isPart ? -2 : 0,
     polygonOffsetUnits: isPart ? -2 : 0,
   });
+  if (floorBands) applyFloorBands(mat);
   cache.set(key, mat);
   return mat;
 }
@@ -145,7 +232,16 @@ export function materialsFor(b: Building): [THREE.MeshStandardMaterial, THREE.Me
   const roofFinish = resolveFinish(b.roofMaterial ?? b.material);
 
   const p = b.isPart ? "p" : "b";
-  const wall = getMaterial(wallColour, wallFinish, `${p}w:${wallColour}:${b.material ?? "-"}`, b.isPart);
+  // Solo los MUROS llevan bandas. Las tapas (grupo 0) son cubierta y solado: dividirlas
+  // por pisos no significa nada. Como muro y tapa se cachean con prefijos distintos
+  // (`w:` / `r:`), nunca acaban siendo el mismo objeto aunque coincida el color.
+  const wall = getMaterial(
+    wallColour,
+    wallFinish,
+    `${p}w:${wallColour}:${b.material ?? "-"}`,
+    b.isPart,
+    true,
+  );
   const roof = getMaterial(
     roofColour,
     roofFinish,
@@ -163,6 +259,9 @@ export function highlightMaterial(base: THREE.MeshStandardMaterial): THREE.MeshS
   m.emissiveIntensity = 0.55;
   m.transparent = false;
   m.opacity = 1;
+  // `Material.copy()` no arrastra `onBeforeCompile` ni `customProgramCacheKey`, así que
+  // el clon perdería las bandas y el edificio seleccionado sería el único sin fachada.
+  if (base.customProgramCacheKey() === "wall-floor-bands") applyFloorBands(m);
   return m;
 }
 

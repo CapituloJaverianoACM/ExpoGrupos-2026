@@ -5,19 +5,23 @@ import { useCallback, useMemo, useState } from "react";
 import * as THREE from "three";
 import { usePreparedBuildings, type PreparedBuilding } from "./Buildings";
 import { Scene, type Focus } from "./Scene";
-import type { CampusData } from "@/lib/types";
+import type { CampusData, PlacesData, TerrainData } from "@/lib/types";
 
-type Props = { data: CampusData };
+type Props = { data: CampusData; terrain: TerrainData; places: PlacesData };
 
 /** Ancho de la barra lateral en px. Debe coincidir con la clase `w-72` del <aside>. */
 const SIDEBAR_WIDTH = 288;
 
-export function CampusExplorer({ data }: Props) {
+export function CampusExplorer({ data, terrain, places }: Props) {
   const prepared = usePreparedBuildings(data.buildings);
   const [webglFailed, setWebglFailed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(true);
+  const [showTrees, setShowTrees] = useState(true);
+  const [showAO, setShowAO] = useState(true);
+  const [showAccesses, setShowAccesses] = useState(false);
+  const [showServices, setShowServices] = useState(false);
   const [query, setQuery] = useState("");
   const [includeUnnamed, setIncludeUnnamed] = useState(false);
   const [focus, setFocus] = useState<Focus | null>(null);
@@ -103,10 +107,16 @@ export function CampusExplorer({ data }: Props) {
         >
           <Scene
             data={data}
+            terrain={terrain}
+            places={places}
             prepared={prepared}
             selectedId={selectedId}
             hoveredId={hoveredId}
             showLabels={showLabels}
+            showTrees={showTrees}
+            showAO={showAO}
+            showAccesses={showAccesses}
+            showServices={showServices}
             focus={focus}
             sidebarWidth={SIDEBAR_WIDTH}
             onSelect={select}
@@ -127,6 +137,11 @@ export function CampusExplorer({ data }: Props) {
           <p>
             <b className="text-orange-400">{data.meta.buildingCount}</b> volúmenes ·{" "}
             <b className="text-orange-400">{data.meta.namedCount}</b> con nombre
+          </p>
+          <p>
+            <b className="text-orange-400">{terrain.meta.pathCount}</b> vías ·{" "}
+            <b className="text-orange-400">{terrain.meta.areaCount}</b> zonas ·{" "}
+            <b className="text-orange-400">{terrain.meta.treeCount}</b> árboles
           </p>
           <p>
             {data.meta.widthM} × {data.meta.depthM} m
@@ -188,6 +203,23 @@ export function CampusExplorer({ data }: Props) {
             on={includeUnnamed}
             onClick={() => setIncludeUnnamed((v) => !v)}
           />
+          <Toggle
+            label={`Arbolado · ${terrain.meta.treeCount}`}
+            on={showTrees}
+            onClick={() => setShowTrees((v) => !v)}
+          />
+          <Toggle
+            label={`Accesos · ${places.meta.accessCount}`}
+            on={showAccesses}
+            onClick={() => setShowAccesses((v) => !v)}
+          />
+          <Toggle
+            label={`Servicios · ${places.meta.serviceCount}`}
+            on={showServices}
+            onClick={() => setShowServices((v) => !v)}
+          />
+          {/* El AO es lo más caro de la escena. Se deja apagable para GPUs integradas. */}
+          <Toggle label="Oclusión ambiental" on={showAO} onClick={() => setShowAO((v) => !v)} />
           <button
             type="button"
             onClick={() => {
@@ -216,7 +248,24 @@ export function CampusExplorer({ data }: Props) {
             {selected.building.name ?? "Edificio sin nombre en OSM"}
           </h2>
           <Row label="Tipo (OSM)" value={selected.building.kind} />
-          <Row label="Niveles" value={selected.building.levels?.toString() ?? "—"} />
+          {/* Los pisos que se ven en la fachada no siempre son dato de OSM: solo 68 de
+              276 volúmenes traen `building:levels`. Cuando se deducen de la altura hay
+              que decirlo, o la ficha estaría afirmando algo que OSM no dice. */}
+          <Row
+            label="Niveles"
+            value={
+              selected.building.levels != null ? (
+                selected.building.levels.toString()
+              ) : selected.geometry.floors.levels > 0 ? (
+                <span className="text-slate-300">
+                  ~{selected.geometry.floors.levels}{" "}
+                  <span className="text-[9px] text-slate-500">estimado</span>
+                </span>
+              ) : (
+                "—"
+              )
+            }
+          />
           <Row label="Altura" value={`${selected.building.height} m`} />
           {selected.building.minHeight > 0 && (
             <Row label="Arranca a" value={`${selected.building.minHeight} m`} />
